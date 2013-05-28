@@ -26,12 +26,16 @@
 //Imports for Ethernet
 #include <EtherCard.h>
 
+//enable Serial Debug
+#define SERIAL 1
+
 // Conversion float into string with justifying
 char * floatToString(char *, float, int, int=0, bool=false);
 
-
-#define BUTTON_PIN 22
-#define LED_ACTIVITY_PIN 9
+//Button for switching LCD Screen
+#define BUTTON_PIN        49
+//Led blink at each cycle
+#define LED_ACTIVITY_PIN  9
 
 
 
@@ -39,8 +43,9 @@ char * floatToString(char *, float, int, int=0, bool=false);
 // DEFINES For LCD Display
 //------------------------------------------------------------------------------------
 
-#define MAX_AMPS_PER_PHASE 15     // 15 A per phase supply
-#define MAX_WATTS_PER_PHASE 3450  // 3450 W per phase supply
+#define NUMBER_OF_SCREENS      3
+#define MAX_AMPS_PER_PHASE     15     // 15 A per phase supply
+#define MAX_WATTS_PER_PHASE    3450  // 3450 W per phase supply
 
 #if defined(ARDUINO) && ARDUINO >= 100
 #define printByte(args)  write(args);
@@ -49,10 +54,9 @@ char * floatToString(char *, float, int, int=0, bool=false);
 #endif
 
 
-uint8_t sum[8]    = {
-  0x1F,0x10,0x8,0x4,0x8,0x10,0x1F};
-uint8_t heart[8]  = {
-  0x0,0xa,0x1f,0x1f,0xe,0x4,0x0};
+uint8_t sum[8]    = {0x1F,0x10,0x8,0x4,0x8,0x10,0x1F};
+uint8_t heart[8]  = {0x0,0xa,0x1f,0x1f,0xe,0x4,0x0};
+
 
 // set the LCD address to 0x27 for a 16 chars and 2 line display
 LiquidCrystal_I2C lcd(0x3F,20,4);  
@@ -61,7 +65,7 @@ LcdBarGraph lbg2(&lcd, 10, 10, 1);  // -- creating bargraph line 2
 LcdBarGraph lbg3(&lcd, 10, 10, 2);  // -- creating bargraph line 3
 
 char bufferString[25];
-boolean lcdEcranAmp = false;
+int lcdEcranAmp = 1;
 boolean activityLed = true;
 
 //------------------------------------------------------------------------------------
@@ -75,7 +79,7 @@ static byte myip[] = { 192,168,0,202 };
 static byte gwip[] = { 192,168,0,254 };
 // server Ip
 static byte webServerIp[] = { 192,168,0,200};
-static int webServerPort = 8080;
+static int webServerPort = 80;
 // remote website name (for testing ethernet OK)
 char website[] PROGMEM = "www.google.com";
 
@@ -99,7 +103,6 @@ static void my_result_cb (byte status, word off, word len) {
 //------------------------------------------------------------------------------------
 #define CONFIG_EEPROM_ADDR ((byte*) 0x10)
 
-#define SERIAL 1
 
 #define VERSION 3
 #define NODE_TYPE 0x01
@@ -185,13 +188,13 @@ static void ConfigDefaults() {
         config.Phase_Calibration[1] = 1.7;
         config.Phase_Calibration[2] = 1.7;
         //config.Current_Calibration[0] = 0.1080;
-        config.Current_Calibration[0] = 0.1267;
-        config.Current_Calibration[1] = 0.1267;
-        config.Current_Calibration[2] = 0.1267;
+        config.Current_Calibration[0] = 0.1315;
+        config.Current_Calibration[1] = 0.1487;
+        config.Current_Calibration[2] = 0.1026;
         //config.Voltage_Calibration[0] = 0.4581;
-        config.Voltage_Calibration[0] = 1.0139;
-        config.Voltage_Calibration[1] = 1.0139;
-        config.Voltage_Calibration[2] = 1.0139;
+        config.Voltage_Calibration[0] = 1.0098;
+        config.Voltage_Calibration[1] = 1.0098;
+        config.Voltage_Calibration[2] = 1.0098;
         config.Voltage = 230.0;
 }
 
@@ -490,7 +493,7 @@ void setup()
   ADCSRA |= (1 << ADATE); // Enable auto-triggering
   ADCSRA |= (1 << ADIE);  // Enable ADC Interrupt
   
-  sei();  	     // Enable Global Interrupts
+  sei();		     // Enable Global Interrupts
 
   //put code here to start adc after zero crossing. *TODO*  but not a problem, because we do not pick up first sampled data...
   //...
@@ -881,10 +884,6 @@ void process_rf(){
 
 void loop()
 {
-
-//  if (rf12_recvDone())
-//      if (rf12_crc == 0 && (rf12_hdr & RF12_HDR_CTL) == 0)  // and no rf errors
-//        process_rf(); 
     
     boolean transmit = false;
     float Vrms[3];
@@ -895,6 +894,8 @@ void loop()
     
   //receive ethernet packet
   ether.packetLoop(ether.packetReceive());
+  
+
     
   //skip first cycle to stabilize readings
   //and init LCD
@@ -903,6 +904,25 @@ void loop()
     Cycle_Full = false;
     
     initLcd3Phases();
+  }
+  
+  if (tcount > 0){
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      lcdEcranAmp++;
+      if(lcdEcranAmp > NUMBER_OF_SCREENS) lcdEcranAmp = 1;
+      
+      if(lcdEcranAmp == 1 || lcdEcranAmp == 2){
+        lbg1.drawValue(0, 1);
+        lbg2.drawValue(0, 1);
+        lbg3.drawValue(0, 1);
+        initLcd3Phases();
+      }else if(lcdEcranAmp == 3){
+        initLcdPowerAndAmps(); 
+      }
+      
+      //Print LCD
+      printLCD();
+    }
   }
   
   //-------------------------------------------
@@ -1083,11 +1103,7 @@ void loop()
          emontx.PF_3 = AccPowerFactor[2];   
        #endif
        
-       //send data
-//       int i = 0; while (!rf12_canSend() && i<10) {rf12_recvDone(); i++;}
-//       byte outdest = config.sendTo & RF12_HDR_MASK ? RF12_HDR_DST | config.sendTo : 0;
-//       rf12_sendStart(outdest, &emontx, sizeof emontx);
-
+       
 #ifdef SERIAL
        Serial.print("Total = ");
        Serial.print(emontx.totalP);
@@ -1126,16 +1142,12 @@ void loop()
 
 
     //Print LCD
-    if(lcdEcranAmp){      
-      printAmps(AccIrms,Vrms[0]);
-      //lcdEcranAmp=false;
-    }else{
-      printWatts(AccRealPower,AccVrms[0]);
-      //lcdEcranAmp=true;
-    }
-
+    printLCD();
+    
     //transmit Ethernet
+#ifdef SERIAL
     Serial.println("\n>>> REQ");
+#endif
     //build URL with values
     String param = "input/post?json={voltage:";
     param += floatToString(bufferString, emontx.V1, 2);    
@@ -1155,7 +1167,9 @@ void loop()
     param += floatToString(bufferString, emontx.Irms3, 2);
     param += "}&apikey=b4b22e89c0f72a426ae948e97497709c";
     param.toCharArray(cParam, 255);
+#ifdef SERIAL
     Serial.println(cParam);  
+#endif
 
     //Blink Heart & Led Activity
     lcd.setCursor(19, 3);
@@ -1203,69 +1217,113 @@ void loop()
   }//cycle full
 }
 
-// Print LCD Screen with Intensity Values
-void printAmps(float Irms[3], float voltage) {
+void printLCD(){
+  
+     //Print LCD
+    if(lcdEcranAmp == 1){      
+      printAmps(emontx.Irms1, emontx.Irms2, emontx.Irms3, emontx.V1);
+    }else if(lcdEcranAmp == 2){
+      printWatts(emontx.RP1, emontx.RP2, emontx.RP3, emontx.totalP, emontx.V1);
+    }else if(lcdEcranAmp == 3){
+      printPowerAndAmps(emontx.Irms1, emontx.Irms2, emontx.Irms3, emontx.RP1, emontx.RP2, emontx.RP3, emontx.totalP, emontx.PF_1, emontx.PF_2, emontx.PF_3, emontx.V1);
+    }
+    
+}
 
-  float l1=Irms[0];
-  float l2=Irms[1];
-  float l3=Irms[2];  
+// Print LCD Screen with Intensity Values
+void printAmps(float irms1, float irms2, float irms3, float voltage) {
   
   lcd.setCursor(0, 0);
   lcd.print("L1 ");
-  lcd.print(floatToString(bufferString, l1, 2, 5,true));
+  lcd.print(floatToString(bufferString, irms1, 2, 5,true));
   lcd.print("A ");
-  lbg1.drawValue(int(l1 * 100), MAX_AMPS_PER_PHASE * 100);
+  lbg1.drawValue(int(irms1 * 100), MAX_AMPS_PER_PHASE * 100);
   lcd.setCursor(0, 1);
   lcd.print("L2 ");
-  lcd.print(floatToString(bufferString, l2, 2, 5,true));
+  lcd.print(floatToString(bufferString, irms2, 2, 5,true));
   lcd.print("A ");
-  lbg2.drawValue(int(l2 * 100), MAX_AMPS_PER_PHASE * 100);
+  lbg2.drawValue(int(irms2 * 100), MAX_AMPS_PER_PHASE * 100);
   lcd.setCursor(0, 2);
   lcd.print("L3 ");
-  lcd.print(floatToString(bufferString, l3, 2, 5,true));
+  lcd.print(floatToString(bufferString, irms3, 2, 5,true));
   lcd.print("A ");
-  lbg3.drawValue(int(l3 * 100), MAX_AMPS_PER_PHASE * 100);
+  lbg3.drawValue(int(irms3 * 100), MAX_AMPS_PER_PHASE * 100);
 
-  float sum = l1+l2+l3;
+  float sum = irms1 + irms2 + irms3;
   lcd.setCursor(0, 3);
   lcd.printByte(6);
   lcd.setCursor(1, 3);
   lcd.print(" ");
   lcd.print(floatToString(bufferString, sum, 2, 6,true));
   lcd.print("A   ");
-  lcd.print(floatToString(bufferString, emontx.V1, 2, 6,true));
-  lcd.print("V");
+  lcd.print(floatToString(bufferString, voltage, 1, 5,true));
+  lcd.print("V ");
 
 }
 
 // Print LCD Screen with Power Values
-void printWatts(float realPower[3], float voltage) {
-  
-  float l1=realPower[0];
-  float l2=realPower[1];
-  float l3=realPower[2];  
-  
-  lcd.setCursor(3, 0);
-  lcd.print(floatToString(bufferString, l1, 0, 6,true));
-  lcd.print("W ");
-  lbg1.drawValue(int(l1), MAX_WATTS_PER_PHASE);
-  lcd.setCursor(3, 1);
-  lcd.print(floatToString(bufferString, l2, 0, 6,true));
-  lcd.print("W ");
-  lbg2.drawValue(int(l2), MAX_WATTS_PER_PHASE);
-  lcd.setCursor(3, 2);
-  lcd.print(floatToString(bufferString, l3, 0, 6,true));
-  lcd.print("W ");
-  lbg3.drawValue(int(l3), MAX_WATTS_PER_PHASE);
+void printWatts(float power1, float power2, float power3, float powersSum, float voltage) {
 
-  float sum = l1+l2+l3;
+  lcd.setCursor(3, 0);
+  lcd.print(floatToString(bufferString, power1, 0, 6,true));
+  lcd.print("W ");
+  lbg1.drawValue(int(power1), MAX_WATTS_PER_PHASE);
+  lcd.setCursor(3, 1);
+  lcd.print(floatToString(bufferString, power2, 0, 6,true));
+  lcd.print("W ");
+  lbg2.drawValue(int(power2), MAX_WATTS_PER_PHASE);
+  lcd.setCursor(3, 2);
+  lcd.print(floatToString(bufferString, power3, 0, 6,true));
+  lcd.print("W ");
+  lbg3.drawValue(int(power3), MAX_WATTS_PER_PHASE);
+
   lcd.setCursor(2, 3);
-  lcd.print(floatToString(bufferString, sum, 0, 7,true));
+  lcd.print(floatToString(bufferString, powersSum, 0, 7,true));
   lcd.print("W   ");
-  lcd.print(floatToString(bufferString, emontx.V1, 2, 6,true));
-  lcd.print("V");
+  lcd.print(floatToString(bufferString, voltage, 1, 5,true));
+  lcd.print("V ");
 
 }
+
+
+// Print LCD Screen with Power Values
+void printPowerAndAmps(float irms1, float irms2, float irms3, float power1, float power2, float power3, float powersSum, float cosPhi1, float cosPhi2, float cosPhi3, float voltage) {
+
+  lcd.setCursor(3, 0);
+  lcd.print(floatToString(bufferString, power1, 0, 5,true));
+  lcd.print("W ");
+  lcd.print(floatToString(bufferString, irms1, 1, 4,true));
+  lcd.print("A ");
+  lcd.print(floatToString(bufferString, cosPhi1, 1, 4,true));
+  lcd.printByte(242);
+  
+  
+  
+  lcd.setCursor(3, 1);
+  lcd.print(floatToString(bufferString, power2, 0, 5,true));
+  lcd.print("W ");
+  lcd.print(floatToString(bufferString, irms2, 1, 4,true));
+  lcd.print("A ");
+  lcd.print(floatToString(bufferString, cosPhi2, 1, 4,true));
+  lcd.printByte(242);
+  
+  lcd.setCursor(3, 2);
+  lcd.print(floatToString(bufferString, power3, 0, 5,true));
+  lcd.print("W ");
+  lcd.print(floatToString(bufferString, irms3, 1, 4,true));
+  lcd.print("A ");
+  lcd.print(floatToString(bufferString, cosPhi3, 1, 4,true));
+  lcd.printByte(242);
+
+  float currentSum = irms1 + irms2 + irms3;
+  lcd.setCursor(2, 3);
+  lcd.print(floatToString(bufferString, powersSum, 0, 6,true));
+  lcd.print("W ");
+  lcd.print(floatToString(bufferString, currentSum, 1, 4,true));
+  lcd.print("A");
+
+}
+
 
 void initLcd3Phases(){
   lcd.clear();
@@ -1288,6 +1346,18 @@ void initLcd3Phases(){
   //init last line
   lcd.setCursor(0, 3);
   lcd.printByte(6);  
+}
+
+void initLcdPowerAndAmps(){
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("L1");
+  lcd.setCursor(0, 1);
+  lcd.print("L2");
+  lcd.setCursor(0, 2);
+  lcd.print("L3");
+  lcd.setCursor(0, 3);
+  lcd.printByte(6);
 }
 
 void initEmptyBargraph(){
@@ -1387,3 +1457,4 @@ char * floatToString(char * outstr, float value, int places, int minwidth, bool 
   outstr[c++] = '\0';
   return outstr;
 }
+
